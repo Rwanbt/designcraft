@@ -749,6 +749,47 @@ mod rendering_regressions {
     }
 
     #[test]
+    fn interactive_panels_show_empty_document_guidance_and_controls() {
+        let mut session = designcraft_engine::Session::new();
+        session.execute("file.new", &json!({})).unwrap();
+        let mut app = DesignApp::new(session, Default::default());
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx, "en");
+
+        type Panel = fn(&mut DesignApp, &mut egui::Ui);
+        let panels: [(&str, Panel, &str); 4] = [
+            ("Object States", states, "Select two or more objects"),
+            ("Buttons", buttons, "Select an object"),
+            ("Media", media, "Select a placed video"),
+            ("Track Changes", track_changes, "No changes"),
+        ];
+        for (name, panel, expected_label) in panels {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 720.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
+            let messages: Vec<&str> = frame
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert!(messages.iter().any(|text| text.contains(expected_label)), "{name} missing expected empty-state guidance: {messages:?}");
+            frame.textures_delta.clear();
+        }
+
+        // The document-aware interactive editors must also construct a frame without
+        // mutating an untouched document or requiring a real window system.
+        for panel in [tags as Panel, liquid, transitions] {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
+            assert!(!frame.shapes.is_empty(), "document panel rendered no interface");
+            frame.textures_delta.clear();
+        }
+        assert!(!app.session.doc().unwrap().is_dirty(), "rendering idle interactive panels must not edit the document");
+    }
+
+    #[test]
     fn empty_interactive_panels_render_without_document_or_panicking() {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx, "en");
