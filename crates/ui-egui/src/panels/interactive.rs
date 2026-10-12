@@ -804,6 +804,48 @@ mod rendering_regressions {
     }
 
     #[test]
+    fn auxiliary_panels_render_without_selection_or_unexpected_document_edits() {
+        let mut session = designcraft_engine::Session::new();
+        session.execute("file.new", &json!({})).unwrap();
+        let mut app = DesignApp::new(session, Default::default());
+        type Panel = fn(&mut DesignApp, &mut egui::Ui);
+        let panels: [(&str, Panel, Option<&str>); 12] = [
+            ("Object Library", super::super::library::show, Some("No library open")),
+            ("Book", super::super::library::book, Some("No book open")),
+            ("Scripts", super::super::library::scripts, Some("No scripts")),
+            ("Data Merge", super::super::datamerge::show, Some("No data source")),
+            ("Paragraph Styles", super::super::styles::paragraph, None),
+            ("Character Styles", super::super::styles::character, None),
+            ("Swatches", super::super::swatches::show, None),
+            ("Color", super::super::swatches::color_panel, Some("Select an object")),
+            ("Gradient", super::super::swatches::gradient_panel, Some("Select an object")),
+            ("Table", super::super::table::show, Some("insertion point")),
+            ("Properties", super::super::properties::show, None),
+            ("Glyphs", super::super::glyphs::show, None),
+        ];
+        for (name, panel, expected_label) in panels {
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts(&ctx, "en");
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(760.0, 720.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
+            assert!(!frame.shapes.is_empty(), "{name} must display controls or empty-state guidance");
+            if let Some(expected) = expected_label {
+                let labels: Vec<&str> = frame
+                    .shapes
+                    .iter()
+                    .filter_map(|s| match &s.shape {
+                        egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                assert!(labels.iter().any(|s| s.contains(expected)), "{name} did not show expected {expected:?}: {labels:?}");
+            }
+            frame.textures_delta.clear();
+            assert!(!app.session.doc().unwrap().is_dirty(), "{name} modified the document while idle");
+        }
+    }
+
+    #[test]
     fn empty_interactive_panels_render_without_document_or_panicking() {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx, "en");
