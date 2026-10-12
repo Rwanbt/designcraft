@@ -152,3 +152,37 @@ fn run_export_options_come_before_their_export() {
     assert!(out.status.success(), "{err}");
     assert!(err.contains("wrote") && std::path::Path::new(a).exists() && std::path::Path::new(b).exists(), "{err}");
 }
+
+#[test]
+fn sample_pdfx4_export_passes_independent_cli_validation() {
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = dir.path().join("sample.pdf");
+    let path = pdf.to_str().unwrap();
+    let exported = cli().args(["run", "--sample", "--pdf-options", r#"{"standard":"x4"}"#, "--export", path]).output().unwrap();
+    assert!(exported.status.success(), "{}", String::from_utf8_lossy(&exported.stderr));
+
+    let bytes = std::fs::read(&pdf).unwrap();
+    assert!(bytes.starts_with(b"%PDF-"), "missing PDF header");
+    assert!(bytes.windows(5).any(|part| part == b"%%EOF"), "missing PDF trailer");
+    assert!(bytes.len() > 1024, "suspiciously short multi-page PDF");
+
+    let validation = cli().args(["validate-pdf", path]).output().unwrap();
+    assert!(validation.status.success(), "{}", String::from_utf8_lossy(&validation.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&validation.stdout).unwrap();
+    assert_eq!(report["standard"], "PDF/X-4");
+    assert_eq!(report["valid"], true);
+    assert!(report["issues"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn malformed_pdf_is_rejected_without_success_exit_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = dir.path().join("truncated.pdf");
+    std::fs::write(&pdf, b"%PDF-1.6\nmissing all content and xref").unwrap();
+
+    let output = cli().args(["validate-pdf", pdf.to_str().unwrap()]).output().unwrap();
+    assert!(!output.status.success(), "invalid PDF must not pass validation");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["valid"], false);
+    assert!(!report["issues"].as_array().unwrap().is_empty());
+}
