@@ -80,33 +80,64 @@ pub fn load(bytes: &[u8]) -> Result<Document, FormatError> {
     load_legacy_json(bytes)
 }
 
+// These are decompressed-size limits. ZIP central-directory sizes are untrusted, so each
+// entry is also read through a bounded stream. Large professional image assets remain
+// supported, but a compressed archive cannot allocate unbounded amounts of memory.
+const MAX_METADATA_JSON: u64 = 256 * 1024;
+const MAX_DOCUMENT_JSON: u64 = 128 * 1024 * 1024;
+const MAX_EMBEDDED_ASSET: u64 = 256 * 1024 * 1024;
+const MAX_EMBEDDED_TOTAL: u64 = 1024 * 1024 * 1024;
+
+fn read_zip_entry(z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str, limit: u64) -> Result<Option<Vec<u8>>, FormatError> {
+    let mut file = match z.by_name(name) {
+        Ok(file) => file,
+        Err(zip::result::ZipError::FileNotFound) => return Ok(None),
+        Err(e) => return Err(FormatError::NotOurs(format!("{name}: {e}"))),
+    };
+    if file.size() > limit {
+        return Err(FormatError::NotOurs(format!("{name} exceeds the {limit}-byte decompressed entry limit")));
+    }
+    let mut data = Vec::new();
+    (&mut file).take(limit + 1).read_to_end(&mut data).map_err(|e| FormatError::NotOurs(format!("{name}: {e}")))?;
+    if data.len() as u64 > limit {
+        return Err(FormatError::NotOurs(format!("{name} exceeds the {limit}-byte decompressed entry limit")));
+    }
+    Ok(Some(data))
+}
+
 fn load_zip(bytes: &[u8]) -> Result<Document, FormatError> {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| FormatError::NotOurs(e.to_string()))?;
-    let read = |z: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str| -> Option<Vec<u8>> {
-        let mut f = z.by_name(name).ok()?;
-        let mut v = Vec::new();
-        f.read_to_end(&mut v).ok()?;
-        Some(v)
-    };
-    if let Some(meta) = read(&mut z, "meta.json")
+    if let Some(meta) = read_zip_entry(&mut z, "meta.json", MAX_METADATA_JSON)?
         && let Ok(m) = serde_json::from_slice::<Value>(&meta)
         && let Some(v) = m.get("version").and_then(Value::as_u64)
         && v > u64::from(VERSION)
     {
-        // Checking after a narrowing cast wraps large untrusted version numbers:
-        // e.g. 4294967297 was treated as the supported format version 1.
+        // Comparing after a narrowing cast wraps untrusted format versions.
         return Err(FormatError::TooNew(u32::try_from(v).unwrap_or(u32::MAX)));
     }
-    let json = read(&mut z, "document.json").ok_or_else(|| FormatError::NotOurs("missing document.json".into()))?;
+    let json = read_zip_entry(&mut z, "document.json", MAX_DOCUMENT_JSON)?.ok_or_else(|| FormatError::NotOurs("missing document.json".into()))?;
     let mut v: Value = serde_json::from_slice(&json).map_err(|e| FormatError::NotOurs(e.to_string()))?;
     upgrade(&mut v);
     let mut doc: Document = serde_json::from_value(v).map_err(|e| FormatError::NotOurs(e.to_string()))?;
     let names: Vec<String> = z.file_names().map(str::to_string).collect();
+    let mut total = 0u64;
+    let mut seen = HashSet::new();
     for name in names {
         let Some(stem) = name.strip_prefix("assets/") else { continue };
         let Some(id) = stem.split('.').next().and_then(|s| s.parse::<u64>().ok()) else { continue };
-        if let (Some(data), Some(a)) = (read(&mut z, &name), doc.assets.get_mut(&AssetId(id))) {
-            Arc::make_mut(a).data = Arc::new(data);
+        let id = AssetId(id);
+        if !doc.assets.contains_key(&id) {
+            continue;
+        }
+        if !seen.insert(id) {
+            return Err(FormatError::NotOurs(format!("duplicate embedded asset ID {}", id.0)));
+        }
+        let remaining = MAX_EMBEDDED_TOTAL - total;
+        if let Some(data) = read_zip_entry(&mut z, &name, MAX_EMBEDDED_ASSET.min(remaining))? {
+            total += data.len() as u64;
+            if let Some(asset) = doc.assets.get_mut(&id) {
+                Arc::make_mut(asset).data = Arc::new(data);
+            }
         }
     }
     doc.check().map_err(|e| FormatError::NotOurs(e.to_string()))?;
@@ -333,4 +364,68 @@ mod tests {
         }
         assert!(matches!(load(&buf.into_inner()), Err(FormatError::TooNew(99))));
     }
+    #[test]
+    fn compressed_metadata_bomb_is_rejected_before_allocation() {
+        let document = Document::new(&NewDocument::default());
+        let payload = serde_json::to_vec(&document).unwrap();
+        let mut zip_buf = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut zip_buf);
+            let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("meta.json", opts).unwrap();
+            zip.write_all(&vec![b' '; (MAX_METADATA_JSON + 1) as usize]).unwrap();
+            zip.start_file("document.json", opts).unwrap();
+            zip.write_all(&payload).unwrap();
+            zip.finish().unwrap();
+        }
+        let result = load(&zip_buf.into_inner());
+        assert!(matches!(result, Err(FormatError::NotOurs(e)) if e.contains("meta.json") && e.contains("limit")));
+    }
+
+    #[test]
+    fn entry_reader_enforces_decompressed_limits_and_preserves_valid_bytes() {
+        let data = vec![42u8; 2048];
+        let mut zip_buf = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut zip_buf);
+            let opts = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("payload.bin", opts).unwrap();
+            zip.write_all(&data).unwrap();
+            zip.finish().unwrap();
+        }
+        let bytes = zip_buf.into_inner();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+        assert!(matches!(read_zip_entry(&mut archive, "payload.bin", 2047), Err(FormatError::NotOurs(_))));
+        assert_eq!(read_zip_entry(&mut archive, "payload.bin", 2048).unwrap(), Some(data));
+        assert_eq!(read_zip_entry(&mut archive, "missing.bin", 100).unwrap(), None);
+    }
+
+    #[test]
+    fn native_zip_rejects_duplicate_embedded_asset_ids() {
+        let mut document = Document::new(&NewDocument::default());
+        let id = AssetId(document.alloc());
+        document.assets.insert(
+            id,
+            Arc::new(Asset {
+                page: 0, id, name: "image.png".into(), mime: "image/png".into(),
+                link: None, data: Arc::new(Vec::new()), pixels: Some((1, 1)),
+            }),
+        );
+        let payload = serde_json::to_vec(&document).unwrap();
+        let mut zip_buf = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut zip_buf);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("document.json", opts).unwrap();
+            zip.write_all(&payload).unwrap();
+            for ext in ["png", "jpg"] {
+                zip.start_file(format!("assets/{}.{}", id.0, ext), opts).unwrap();
+                zip.write_all(&[1, 2, 3]).unwrap();
+            }
+            zip.finish().unwrap();
+        }
+        let result = load(&zip_buf.into_inner());
+        assert!(matches!(result, Err(FormatError::NotOurs(e)) if e.contains("duplicate embedded asset ID")));
+    }
+
 }
