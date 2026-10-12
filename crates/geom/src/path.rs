@@ -420,13 +420,7 @@ mod tests {
 
     #[test]
     fn malformed_anchor_coordinates_fail_without_silent_defaults() {
-        for json in [
-            r#"{"p":[]}"#,
-            r#"{"p":[1]}"#,
-            r#"{"p":{"x":1}}"#,
-            r#"{"p":{"y":2}}"#,
-            r#"{"p":{"x":"bad","y":2}}"#,
-        ] {
+        for json in [r#"{"p":[]}"#, r#"{"p":[1]}"#, r#"{"p":{"x":1}}"#, r#"{"p":{"y":2}}"#, r#"{"p":{"x":"bad","y":2}}"#] {
             assert!(serde_json::from_str::<Anchor>(json).is_err(), "{json}");
         }
         let future = r#"{"p":{"x":1,"y":2,"future":true}}"#;

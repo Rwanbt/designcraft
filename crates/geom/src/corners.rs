@@ -171,10 +171,7 @@ mod tests {
 
     #[test]
     fn open_polylines_do_not_acquire_live_corners() {
-        let path = PathData::single(SubPath::polyline(
-            &[Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0)],
-            false,
-        ));
+        let path = PathData::single(SubPath::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0)], false));
         let result = apply(&path, &CornerOptions::uniform(CornerShape::Rounded, 4.0));
         assert_eq!(result.elements(), path.to_bezpath().elements());
     }
