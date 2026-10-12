@@ -373,6 +373,36 @@ mod tests {
     }
 
     #[test]
+    fn every_unit_has_a_stable_label_and_suffix() {
+        let expected = [
+            ("Points", " pt"),
+            ("Picas", "p"),
+            ("Inches", " in"),
+            ("Inches Decimal", " in"),
+            ("Millimeters", " mm"),
+            ("Centimeters", " cm"),
+            ("Ciceros", "c"),
+            ("Agates", " ag"),
+            ("Pixels", " px"),
+            ("Q", " Q"),
+            ("Ha", " H"),
+        ];
+        for (unit, (label, suffix)) in Unit::ALL.into_iter().zip(expected) {
+            assert_eq!(unit.label(), label, "{unit:?}");
+            assert_eq!(unit.suffix(), suffix, "{unit:?}");
+            for pt in [-123.5, 0.0, 612.25] {
+                assert!((unit.to_pt(unit.from_pt(pt)) - pt).abs() < 1e-10, "{unit:?}: {pt}");
+            }
+        }
+    }
+
+    #[test]
+    fn pica_carry_near_twelve_points_is_not_dropped() {
+        assert_eq!(format_measure_prec(24.0 - 1e-7, Unit::Picas, 6), "2p0");
+        assert_eq!(format_measure_prec(-(24.0 - 1e-7), Unit::Picas, 6), "-2p0");
+    }
+
+    #[test]
     fn ruler_ticks_handle_invalid_and_extreme_zoom() {
         for unit in Unit::ALL {
             let fallback = unit.ruler_ticks(1.0);
