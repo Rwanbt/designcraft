@@ -407,8 +407,13 @@ mod tests {
         document.assets.insert(
             id,
             Arc::new(Asset {
-                page: 0, id, name: "image.png".into(), mime: "image/png".into(),
-                link: None, data: Arc::new(Vec::new()), pixels: Some((1, 1)),
+                page: 0,
+                id,
+                name: "image.png".into(),
+                mime: "image/png".into(),
+                link: None,
+                data: Arc::new(Vec::new()),
+                pixels: Some((1, 1)),
             }),
         );
         let payload = serde_json::to_vec(&document).unwrap();
@@ -427,5 +432,4 @@ mod tests {
         let result = load(&zip_buf.into_inner());
         assert!(matches!(result, Err(FormatError::NotOurs(e)) if e.contains("duplicate embedded asset ID")));
     }
-
 }
