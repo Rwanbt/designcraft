@@ -186,3 +186,20 @@ fn malformed_pdf_is_rejected_without_success_exit_status() {
     assert_eq!(report["valid"], false);
     assert!(!report["issues"].as_array().unwrap().is_empty());
 }
+
+#[test]
+fn perf_and_bench_reject_invalid_arguments_without_starting_a_heavy_benchmark() {
+    for args in [
+        vec!["perf", "--pages", "invalid"],
+        vec!["perf", "--frames", "not-an-integer"],
+        vec!["perf", "--runs"],
+        vec!["perf", "--unknown"],
+        vec!["bench"],
+        vec!["bench", "--runs", "bad"],
+    ] {
+        let result = cli().args(&args).output().unwrap();
+        assert!(!result.status.success(), "{args:?} must fail");
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!stderr.trim().is_empty(), "{args:?} must explain the failure");
+    }
+}
