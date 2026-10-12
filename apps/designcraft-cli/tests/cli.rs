@@ -40,7 +40,9 @@ fn script_from_stdin_with_references_saves_and_exports() {
 
     // PNG compression is not a pixel oracle; compare independently decoded RGBA pixels.
     let reopened = dir.path().join("reopened.png");
-    let out = cli().args(["run", "--in", doc.to_str().unwrap(), "--export", reopened.to_str().unwrap()]).output().unwrap();
+    // The script backend's app.export defaults to 2 px/pt, whereas CLI run defaults to 1.
+    // Request the same raster scale explicitly; do not conflate output settings with persistence.
+    let out = cli().args(["run", "--in", doc.to_str().unwrap(), "--scale", "2", "--export", reopened.to_str().unwrap()]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let after_bytes = std::fs::read(&reopened).unwrap();
     let before_pixels = image::load_from_memory(&bytes).unwrap().to_rgba8();
