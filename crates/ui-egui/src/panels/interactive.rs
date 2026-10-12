@@ -789,12 +789,16 @@ mod rendering_regressions {
             assert!(!frame.shapes.is_empty(), "{name} must show document or empty-state guidance");
             frame.textures_delta.clear();
         }
-        let current_page = crate::canvas::current_page(&app);
-        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0))), ..Default::default() };
+        // Initialize the same viewport state as the real canvas before testing the
+        // page transition controls; merely creating a document does not create a view.
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0));
+        app.canvas_rect = Some(rect);
+        app.view_mut().unwrap();
+        crate::canvas::fit(&mut app, rect, "page");
+        assert_eq!(crate::canvas::current_page(&app), Some(0), "test fixture must resolve page one");
+        let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
         let mut frame = ctx.run_ui(input, |ui| transitions(&mut app, ui));
-        if current_page.is_some() {
-            assert!(!frame.shapes.is_empty(), "Transitions must show controls when the canvas has a page");
-        }
+        assert!(!frame.shapes.is_empty(), "Transitions must show controls with a current page");
         frame.textures_delta.clear();
         assert!(!app.session.doc().unwrap().is_dirty(), "rendering idle interactive panels must not edit the document");
     }
