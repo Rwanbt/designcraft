@@ -1,5 +1,14 @@
 # Residual risks and integration blockers
 
+## 2026-10-13 verified continuation (supersedes the older status below)
+
+The fork draft PR remains **PARTIALLY VERIFIED**, not production-ready. At `d120ef52`, the Rust workspace, cross-platform geometry and WASM checks succeeded, and raw LLVM LCOV measured **68,350/84,399 = 80.98% lines** across 243 files ([run 38320291564](https://github.com/Rwanbt/designcraft/actions/runs/38320291564)). A source-line percentage is not a feature coverage guarantee.
+
+- **Native format hardening:** 10/10 isolated format tests passed at `56ba8e42` ([run 38320912833](https://github.com/Rwanbt/designcraft/actions/runs/38320912833)). The ZIP reader now bounds decompressed `meta.json` to **256 KiB**, `document.json` to **128 MiB**, each embedded asset to **256 MiB**, and total embedded asset bytes to **1 GiB**, with both declared-size and streamed-size checks; duplicate asset IDs are rejected. A 256-case deterministic bit-mutation corpus checks panic freedom and document invariants. Legitimate archives exceeding these limits now fail explicitly; legacy JSON decoding, post-deserialization memory pressure, deeply nested adversarial structures and long-duration fuzzing still require review.
+- **Headless UI contracts:** 179 tests passed, none failed, one intentionally ignored benchmark at `1420283f` ([run 38321165995](https://github.com/Rwanbt/designcraft/actions/runs/38321165995)). These include twelve auxiliary panel render checks, persistence read-only invariants, dialog defaults/footnote migration and earlier interactive panels. These tests do not emulate real native window or browser interaction.
+- **Highest remaining LCOV gaps:** `ui-egui/src/dialogs.rs` 2,214 uncovered lines, `panels/properties.rs` 1,093, `panels/swatches.rs` 534, `panels/interactive.rs` 498 (all measured before this additional 12-panel smoke test). Prioritize functional assertions with input events instead of relying only on rendering smoke tests.
+- **Mandatory next gates:** complete CI on the actual merged PR HEAD; true desktop/browser E2E with native file dialogs, save/reopen, clipboard and tool interactions; memory/CPU resource budgets; corpus-based malformed IDML/EPUB/PDF tests; Windows ARM64/FreeBSD packaging behavior, release signature/provenance, and upstream sync review. No claim of 100% justifiable coverage is supported.
+
 As of 2026-10-12, DesignCraft is **PARTIALLY VERIFIED** as a test-improvement exercise; it has **not** been demonstrated production-ready.
 
 | Priority | Risk | Evidence | Required gate |
