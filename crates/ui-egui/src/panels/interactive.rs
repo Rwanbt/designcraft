@@ -13,7 +13,7 @@ fn dest_text(d: &Value) -> String {
         return format!("mailto:{e}");
     }
     if let Some(p) = d.get("page").and_then(Value::as_u64) {
-        return format!("Page {}", p + 1);
+        return format!("Page {}", p.saturating_add(1));
     }
     d.to_string()
 }
@@ -732,4 +732,47 @@ pub fn track_changes(app: &mut DesignApp, ui: &mut egui::Ui) {
             let _ = app.run("changes.rejectAll", json!({}));
         }
     });
+}
+
+#[cfg(test)]
+mod rendering_regressions {
+    use super::*;
+
+    #[test]
+    fn hyperlink_destination_labels_prioritize_supported_fields_and_bound_page_index() {
+        assert_eq!(dest_text(&json!({"url": "https://example.org", "email": "ignored@example.org", "page": 2})), "https://example.org");
+        assert_eq!(dest_text(&json!({"email": "hi@example.org", "page": 2})), "mailto:hi@example.org");
+        assert_eq!(dest_text(&json!({"page": 0})), "Page 1");
+        assert_eq!(dest_text(&json!({"page": 13})), "Page 14");
+        assert_eq!(dest_text(&json!({"page": u64::MAX})), format!("Page {}", u64::MAX));
+        assert_eq!(dest_text(&json!({"url": 5})), r#"{"url":5}"#);
+    }
+
+    #[test]
+    fn empty_interactive_panels_render_without_document_or_panicking() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx, "en");
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), Default::default());
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 720.0))),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            hyperlinks(&mut app, ui);
+            bookmarks(&mut app, ui);
+            articles(&mut app, ui);
+            transitions(&mut app, ui); // No active page is a legitimate UI state.
+        });
+        let labels: Vec<&str> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(labels.iter().any(|s| s.contains("No bookmarks")), "empty bookmarks panel must explain its state: {labels:?}");
+        assert!(labels.iter().any(|s| s.contains("No hyperlinks")), "empty hyperlink panel must explain its state: {labels:?}");
+        output.textures_delta.clear();
+    }
 }
