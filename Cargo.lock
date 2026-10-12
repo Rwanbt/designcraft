@@ -908,6 +908,7 @@ dependencies = [
  "designcraft-pdf",
  "designcraft-render",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
