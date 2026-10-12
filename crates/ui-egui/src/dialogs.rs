@@ -3833,12 +3833,15 @@ mod tests {
 
     #[test]
     fn footnote_rule_flattening_and_special_character_tokens_are_stable() {
-        let d = Dialog::new("footnoteOptions", json!({
-            "rule": {"weight": 2, "offset": "1p0"},
-            "separator": "\t\u{2003}\u{2002}",
-            "tab": "custom",
-            "extension": 1
-        }));
+        let d = Dialog::new(
+            "footnoteOptions",
+            json!({
+                "rule": {"weight": 2, "offset": "1p0"},
+                "separator": "\t\u{2003}\u{2002}",
+                "tab": "custom",
+                "extension": 1
+            }),
+        );
         assert!(d.fields.get("rule").is_none(), "nested rule is flattened for editable fields");
         assert_eq!(d.fields["rule.weight"], 2);
         assert_eq!(d.fields["rule.offset"], "1p0");
