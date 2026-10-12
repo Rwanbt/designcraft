@@ -753,10 +753,7 @@ mod rendering_regressions {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx, "en");
         let mut app = DesignApp::new(designcraft_engine::Session::new(), Default::default());
-        let input = egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 720.0))),
-            ..Default::default()
-        };
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 720.0))), ..Default::default() };
         let mut output = ctx.run_ui(input, |ui| {
             hyperlinks(&mut app, ui);
             bookmarks(&mut app, ui);
