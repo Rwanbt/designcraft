@@ -191,13 +191,15 @@ pub fn list(dir: &Path) -> Vec<(u64, Value)> {
     let Ok(rd) = std::fs::read_dir(dir) else { return out };
     for e in rd.flatten() {
         let p = e.path();
-        if p.extension().and_then(|x| x.to_str()) != Some("designcraft") {
+        if p.extension().and_then(|x| x.to_str()) != Some("designcraft") || !regular_recovery_file(&p) {
             continue;
         }
         let Some(uid) = p.file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse::<u64>().ok()) else { continue };
         // Metadata is a file on disk: anything but an object (corrupt, hand-edited) counts as none.
-        let meta = std::fs::read_to_string(p.with_extension("json"))
-            .ok()
+        let meta_path = p.with_extension("json");
+        let meta = regular_recovery_file(&meta_path)
+            .then(|| std::fs::read_to_string(&meta_path).ok())
+            .flatten()
             .and_then(|t| serde_json::from_str::<Value>(&t).ok())
             .filter(Value::is_object)
             .unwrap_or(json!({}));
@@ -205,6 +207,20 @@ pub fn list(dir: &Path) -> Vec<(u64, Value)> {
     }
     out.sort_by_key(|e| e.0);
     out
+}
+
+/// Only consume ordinary files from the recovery directory. Symlinked entries could
+/// otherwise read arbitrary files outside the recovery folder during crash restoration.
+fn regular_recovery_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else { return false };
+    if !metadata.file_type().is_file() {
+        return false;
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if is_link_like(&metadata) {
+        return false;
+    }
+    true
 }
 
 /// Reopen every recovery entry as an unsaved document (and remove the entries: the new session
@@ -217,6 +233,10 @@ pub fn open(s: &mut Session, dir: &Path) -> Result<Vec<usize>> {
         #[cfg(not(target_arch = "wasm32"))]
         validate_recovery_dir(dir)?;
         let (doc, _) = files(dir, uid);
+        // Recheck just before opening in case the directory changed after list().
+        if !regular_recovery_file(&doc) {
+            continue;
+        }
         let Ok(bytes) = std::fs::read(&doc) else { continue };
         let mut d = match crate::cmd::from_bytes(&bytes) {
             Ok(d) => d,
@@ -292,6 +312,84 @@ mod tests {
             let entry = entry.unwrap();
             assert_eq!(entry.metadata().unwrap().permissions().mode() & 0o777, 0o600);
         }
+    }
+
+    #[test]
+    fn missing_or_corrupt_metadata_does_not_lose_a_valid_recovery() {
+        for malformed in [None, Some(b"not-json".as_slice()), Some(b"[1,2]".as_slice())] {
+            let root = tempfile::tempdir().unwrap();
+            let dir = root.path().join("recovery");
+            let src = dirty_session();
+            assert_eq!(save(&src, &dir).unwrap(), 1);
+            let (uid, _) = list(&dir)[0].clone();
+            let (_, meta) = files(&dir, uid);
+            match malformed {
+                Some(bytes) => std::fs::write(&meta, bytes).unwrap(),
+                None => std::fs::remove_file(&meta).unwrap(),
+            }
+            assert!(list(&dir)[0].1.is_object());
+            let mut restored = Session::new();
+            assert_eq!(open(&mut restored, &dir).unwrap().len(), 1);
+            let doc = restored.doc().unwrap();
+            assert_eq!(doc.doc.spreads[0].items.len(), 1);
+            assert!(doc.is_dirty());
+            assert!(doc.path.is_none(), "invalid metadata must not inject a file path");
+            assert!(list(&dir).is_empty());
+        }
+    }
+
+    #[test]
+    fn corrupt_document_is_not_consumed_during_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("recovery");
+        assert_eq!(save(&dirty_session(), &dir).unwrap(), 1);
+        let uid = list(&dir)[0].0;
+        let (doc, meta) = files(&dir, uid);
+        std::fs::write(&doc, b"corrupt-but-important").unwrap();
+        let mut restored = Session::new();
+        assert!(open(&mut restored, &dir).unwrap().is_empty());
+        assert!(restored.docs.is_empty(), "corrupt input must never create a partial document");
+        assert_eq!(std::fs::read(&doc).unwrap(), b"corrupt-but-important");
+        assert!(meta.exists(), "keep metadata for diagnosis/recovery");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_recovery_entries_are_not_followed() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("recovery");
+        std::fs::create_dir(&dir).unwrap();
+        let target = root.path().join("outside.designcraft");
+        std::fs::write(&target, b"outside").unwrap();
+        symlink(&target, dir.join("42.designcraft")).unwrap();
+        std::fs::write(dir.join("42.json"), br#"{"path":"outside"}"#).unwrap();
+
+        assert!(list(&dir).is_empty(), "linked documents are not recovery entries");
+        assert!(open(&mut Session::new(), &dir).unwrap().is_empty());
+        assert_eq!(std::fs::read(&target).unwrap(), b"outside");
+        assert!(dir.join("42.designcraft").symlink_metadata().unwrap().file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_metadata_is_not_trusted() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("recovery");
+        assert_eq!(save(&dirty_session(), &dir).unwrap(), 1);
+        let uid = list(&dir)[0].0;
+        let (_, meta) = files(&dir, uid);
+        let outside = root.path().join("outside.json");
+        std::fs::write(&outside, br#"{"path":"/untrusted/original","title":"wrong"}"#).unwrap();
+        std::fs::remove_file(&meta).unwrap();
+        symlink(&outside, &meta).unwrap();
+
+        assert_eq!(list(&dir)[0].1, json!({}), "symlink metadata must be ignored");
+        let mut session = Session::new();
+        assert_eq!(open(&mut session, &dir).unwrap().len(), 1);
+        assert!(session.doc().unwrap().path.is_none());
+        assert_eq!(std::fs::read(&outside).unwrap(), br#"{"path":"/untrusted/original","title":"wrong"}"#);
     }
 
     #[test]

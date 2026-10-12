@@ -91,9 +91,11 @@ fn load_zip(bytes: &[u8]) -> Result<Document, FormatError> {
     if let Some(meta) = read(&mut z, "meta.json")
         && let Ok(m) = serde_json::from_slice::<Value>(&meta)
         && let Some(v) = m.get("version").and_then(Value::as_u64)
-        && v as u32 > VERSION
+        && v > u64::from(VERSION)
     {
-        return Err(FormatError::TooNew(v as u32));
+        // Checking after a narrowing cast wraps large untrusted version numbers:
+        // e.g. 4294967297 was treated as the supported format version 1.
+        return Err(FormatError::TooNew(u32::try_from(v).unwrap_or(u32::MAX)));
     }
     let json = read(&mut z, "document.json").ok_or_else(|| FormatError::NotOurs("missing document.json".into()))?;
     let mut v: Value = serde_json::from_slice(&json).map_err(|e| FormatError::NotOurs(e.to_string()))?;
@@ -285,6 +287,38 @@ mod tests {
         let mut v = serde_json::to_value(&d).unwrap();
         v["settings"].as_object_mut().unwrap().remove("glyphFallback").unwrap();
         assert!(load(&serde_json::to_vec(&v).unwrap()).unwrap().settings.glyph_fallback);
+    }
+
+    #[test]
+    fn refuses_overflowed_future_archive_versions() {
+        let document = Document::new(&NewDocument::default());
+        let payload = serde_json::to_vec(&document).unwrap();
+        for version in [u64::from(VERSION) + 1, 1u64 << 32, (1u64 << 32) + 1, u64::MAX] {
+            let mut buf = Cursor::new(Vec::new());
+            {
+                let mut zip = zip::ZipWriter::new(&mut buf);
+                let opts = zip::write::SimpleFileOptions::default();
+                zip.start_file("meta.json", opts).unwrap();
+                zip.write_all(format!(r#"{{"version":{version}}}"#).as_bytes()).unwrap();
+                zip.start_file("document.json", opts).unwrap();
+                zip.write_all(&payload).unwrap();
+                zip.finish().unwrap();
+            }
+            let expected = u32::try_from(version).unwrap_or(u32::MAX);
+            assert!(
+                matches!(load(&buf.into_inner()), Err(FormatError::TooNew(v)) if v == expected),
+                "future version {version} must be rejected before parsing document content"
+            );
+        }
+    }
+
+    #[test]
+    fn truncated_native_archives_fail_closed() {
+        let bytes = save(&Document::new(&NewDocument::default())).unwrap();
+        assert!(load(&bytes).is_ok(), "fixture must be a valid native document");
+        for len in (0..16).chain((bytes.len() - 16)..bytes.len()) {
+            assert!(load(&bytes[..len]).is_err(), "truncation at {len} was accepted");
+        }
     }
 
     #[test]
