@@ -64,36 +64,6 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-  document-safety:
-    name: Document format and crash recovery (Linux)
-    # On PRs the workspace-linux job exercises these tests as part of the full suite.
-    if: github.event_name == 'push'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 100
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Native dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            pkg-config libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev \
-            libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev \
-            libgl1-mesa-dev libfontconfig1-dev
-      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
-        with:
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: quality-document-safety
-      - name: Format check
-        run: cargo fmt --all -- --check
-      - name: Format and recovery Clippy
-        run: cargo clippy -p designcraft-format -p designcraft-engine --all-targets --locked -- -D warnings
-      - name: Native archive tests
-        run: cargo test -p designcraft-format --locked
-      - name: Crash recovery tests
-        run: cargo test -p designcraft-engine --lib --locked recovery::
-
   workspace-linux:
     name: Rust workspace tests (Linux)
     if: github.event_name != 'push'

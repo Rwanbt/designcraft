@@ -1,0 +1,55 @@
+# Targeted regression checks for recovery and native documents on the fork.
+name: Document safety regression
+on:
+  push:
+    branches: ["test/**", "fix/**"]
+    paths:
+      - "crates/engine/src/recovery.rs"
+      - "crates/format/**"
+      - ".github/workflows/document-safety.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "crates/engine/src/recovery.rs"
+      - "crates/format/**"
+      - ".github/workflows/document-safety.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+concurrency:
+  group: document-safety-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  native-document-tests:
+    name: Native format and recovery contract tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev \
+            libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev \
+            libgl1-mesa-dev libfontconfig1-dev
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: document-safety
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Format and engine Clippy
+        run: cargo clippy -p designcraft-format -p designcraft-engine --all-targets --locked -- -D warnings
+      - name: Native archive unit tests
+        run: cargo test -p designcraft-format --locked
+      - name: Crash recovery regressions
+        run: cargo test -p designcraft-engine --lib --locked recovery::
