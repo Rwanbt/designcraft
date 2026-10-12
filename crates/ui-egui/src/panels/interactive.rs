@@ -764,7 +764,8 @@ mod rendering_regressions {
             ("Track Changes", track_changes, "No changes"),
         ];
         for (name, panel, expected_label) in panels {
-            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 720.0))), ..Default::default() };
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 720.0))), ..Default::default() };
             let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
             let messages: Vec<&str> = frame
                 .shapes
@@ -781,7 +782,8 @@ mod rendering_regressions {
         // The document-aware interactive editors must also construct a frame without
         // mutating an untouched document or requiring a real window system.
         for panel in [tags as Panel, liquid, transitions] {
-            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0))), ..Default::default() };
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0))), ..Default::default() };
             let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
             assert!(!frame.shapes.is_empty(), "document panel rendered no interface");
             frame.textures_delta.clear();
