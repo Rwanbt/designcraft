@@ -110,6 +110,10 @@ impl Unit {
 
     /// Ruler tick spacing (major, subdivisions) in points for a given zoom (screen px per pt).
     pub fn ruler_ticks(self, zoom: f64) -> (f64, u32) {
+        // Zoom can come from saved preferences or automation. Zero/negative scales would
+        // never terminate the major-tick loop; extreme finite scales can overflow it.
+        // Keep the ruler's display scale in a finite, practical range.
+        let zoom = if zoom.is_finite() && zoom > 0.0 { zoom.clamp(1e-6, 1e6) } else { 1.0 };
         let (base, subs): (f64, &[u32]) = match self {
             Unit::Inches | Unit::InchesDecimal => (PT_PER_INCH, &[8, 4, 2]),
             Unit::Picas => (PT_PER_PICA, &[6, 3, 2]),
@@ -364,6 +368,21 @@ mod tests {
                 let (major, sub) = u.ruler_ticks(z);
                 assert!(major > 0.0 && sub >= 1, "{u:?} {z}");
                 assert!(major * z >= 20.0, "{u:?} {z} {major}");
+            }
+        }
+    }
+
+    #[test]
+    fn ruler_ticks_handle_invalid_and_extreme_zoom() {
+        for unit in Unit::ALL {
+            let fallback = unit.ruler_ticks(1.0);
+            for zoom in [0.0, -0.0, -1.0, f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+                assert_eq!(unit.ruler_ticks(zoom), fallback, "{unit:?}: {zoom:?}");
+            }
+            for zoom in [f64::MIN_POSITIVE, 1e-100, 1e100, f64::MAX] {
+                let (major, subdivisions) = unit.ruler_ticks(zoom);
+                assert!(major.is_finite() && major > 0.0, "{unit:?}: {zoom:?}, major={major}");
+                assert!((1..=14).contains(&subdivisions), "{unit:?}: {zoom:?}, sub={subdivisions}");
             }
         }
     }
