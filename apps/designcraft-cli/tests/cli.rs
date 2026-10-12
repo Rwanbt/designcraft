@@ -32,7 +32,7 @@ fn script_from_stdin_with_references_saves_and_exports() {
     assert_eq!(v["results"][1]["text"], "Hi");
     assert!(doc.exists() && png.exists());
     let bytes = std::fs::read(&png).unwrap();
-    assert!(bytes.starts_with(b"\\x89PNG\\r\\n\\x1a\\n"), "export is not a PNG");
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "export is not a PNG");
     assert!(bytes.len() >= 24, "truncated PNG header");
     let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
     let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
