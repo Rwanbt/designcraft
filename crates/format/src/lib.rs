@@ -400,6 +400,26 @@ mod tests {
         assert_eq!(read_zip_entry(&mut archive, "missing.bin", 100).unwrap(), None);
     }
 
+    /// Deterministic, replayable mutation corpus: if a ZIP remains parseable after a
+    /// one-byte corruption, its reconstructed document must still pass model validation.
+    /// Record the mutation index on failure rather than relying on a random fuzz seed.
+    #[test]
+    fn mutated_native_archives_never_panic_or_return_invalid_documents() {
+        let source = save(&Document::new(&NewDocument::default())).unwrap();
+        assert!(source.len() > 200, "mutation fixture must contain ZIP headers and payload");
+        for case in 0..256usize {
+            let mut mutated = source.clone();
+            let index = case.wrapping_mul(7919).wrapping_add(31) % mutated.len();
+            let bit = 1u8 << (case % 8);
+            mutated[index] ^= bit;
+            let outcome = std::panic::catch_unwind(|| load(&mutated));
+            let loaded = outcome.unwrap_or_else(|_| panic!("archive reader panicked for mutation {case} at byte {index}"));
+            if let Ok(doc) = loaded {
+                assert!(doc.check().is_ok(), "mutation {case} at byte {index} returned an invalid document");
+            }
+        }
+    }
+
     #[test]
     fn native_zip_rejects_duplicate_embedded_asset_ids() {
         let mut document = Document::new(&NewDocument::default());
