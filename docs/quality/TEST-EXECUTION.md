@@ -35,3 +35,8 @@ First push-triggered run: https://github.com/Rwanbt/designcraft/actions/runs/382
 ## Failure policy
 
 A red check requires inspecting the failing job logs and correcting the root cause. Never adjust coverage thresholds arbitrarily, remove a test to obtain green, or treat skipped E2E/full workspace as a pass. Independent oracles, real binary smoke tests, fuzzing, workspace coverage, and Windows/macOS desktop checks remain future deliverables.
+
+## Confirmed executions
+
+- [PR validation 38268165029](https://github.com/Rwanbt/designcraft/actions/runs/38268165029), `0dff87b1`: **success**. Rust workspace Linux 1,155 passing, 0 failing, 3 ignored; LLVM geometry only on separately measured runs; wasm geom and cross-platform geometry green.
+- [Geometry follow-up 38270010377](https://github.com/Rwanbt/designcraft/actions/runs/38270010377), `0a0d7ad0`: Linux/Windows/macOS geometry green; 60 geometry tests; LCOV lines 1,753/1,841 (95.22%). CI on this push **did not execute full workspace or CLI E2E**; PR-triggered work is required.
