@@ -749,6 +749,61 @@ mod rendering_regressions {
     }
 
     #[test]
+    fn interactive_panels_show_empty_document_guidance_and_controls() {
+        let mut session = designcraft_engine::Session::new();
+        session.execute("file.new", &json!({})).unwrap();
+        let mut app = DesignApp::new(session, Default::default());
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx, "en");
+
+        type Panel = fn(&mut DesignApp, &mut egui::Ui);
+        let panels: [(&str, Panel, &str); 4] = [
+            ("Object States", states, "Select two or more objects"),
+            ("Buttons", buttons, "Select an object"),
+            ("Media", media, "Select a placed video"),
+            ("Track Changes", track_changes, "No changes"),
+        ];
+        for (name, panel, expected_label) in panels {
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 720.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
+            let messages: Vec<&str> = frame
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert!(messages.iter().any(|text| text.contains(expected_label)), "{name} missing expected empty-state guidance: {messages:?}");
+            frame.textures_delta.clear();
+        }
+
+        // Tags and Liquid draw user guidance even when there is no canvas page.
+        // Transitions requires a *current* canvas page and deliberately returns early
+        // when none is selected; that state is not a UI rendering failure.
+        for (name, panel) in [("Tags", tags as Panel), ("Liquid", liquid)] {
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
+            assert!(!frame.shapes.is_empty(), "{name} must show document or empty-state guidance");
+            frame.textures_delta.clear();
+        }
+        // Initialize the same viewport state as the real canvas before testing the
+        // page transition controls; merely creating a document does not create a view.
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0));
+        app.canvas_rect = Some(rect);
+        app.view_mut().unwrap();
+        crate::canvas::fit(&mut app, rect, "page");
+        assert_eq!(crate::canvas::current_page(&app), Some(0), "test fixture must resolve page one");
+        let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+        let mut frame = ctx.run_ui(input, |ui| transitions(&mut app, ui));
+        assert!(!frame.shapes.is_empty(), "Transitions must show controls with a current page");
+        frame.textures_delta.clear();
+        assert!(!app.session.doc().unwrap().is_dirty(), "rendering idle interactive panels must not edit the document");
+    }
+
+    #[test]
     fn empty_interactive_panels_render_without_document_or_panicking() {
         let ctx = egui::Context::default();
         crate::theme::install_fonts(&ctx, "en");
