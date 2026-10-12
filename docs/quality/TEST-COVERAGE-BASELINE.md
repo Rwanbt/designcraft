@@ -66,3 +66,11 @@ Measured on the PR checkout at `2dc6e1c3`; denominator counts instrumented sourc
 **CI metadata bug fixed in workflow:** for PR events `github.sha` can refer to a synthetic merge commit even when checkout pins `github.event.pull_request.head.sha`. The LCOV report now records actual `git rev-parse HEAD` as `sha` and the workflow-event SHA separately as `workflow_sha`, preventing accidental attribution of measurements to the wrong revision.
 
 Two independently validated PDF/X-4 CLI integration tests from `fix/cli-roundtrip-20261012@3a8e71aa` have been copied into the main draft PR. Their [source run 38275558553](https://github.com/Rwanbt/designcraft/actions/runs/38275558553) passed all **8** CLI tests; revalidation of the combined PR HEAD remains mandatory.
+
+## Verified 2026-10-13 PR line-coverage update
+
+At `d120ef52bcf66338b4871b255e7b5f9aa41f1b5d`, [LLVM workspace run 38320291564](https://github.com/Rwanbt/designcraft/actions/runs/38320291564) reported **68,350 / 84,399 instrumented Rust source lines = 80.98%** across **243 files**. This measures executed lines, not branch, mutation, UI action, platform binary or scenario completeness. The report SHA is read from `git rev-parse HEAD`.
+
+Highest remaining file-level uncovered counts in the uploaded LCOV: `ui-egui/src/dialogs.rs` 2,214/4,300 (48.51% covered); `ui-egui/src/panels/properties.rs` 1,093/2,064 (47.04%); `ui-egui/src/panels/swatches.rs` 534/538 (0.74%); `ui-egui/src/panels/interactive.rs` 498/817 (39.05%); `ui-egui/src/panels/library.rs` 228/228 (0%). Synthetic CLI perf now has 211/509 covered lines (41.45%). These are prioritization data; source-line coverage never implies production-readiness.
+
+The native ZIP decompression bounds and 256-case replayable corruption corpus passed [isolated safety run 38320912833](https://github.com/Rwanbt/designcraft/actions/runs/38320912833) at `56ba8e4295b3d7f61de52f96a3567fd7b09c3227` (10/10 format tests). After integration, the combined PR commit requires independent full-workspace validation; historical passing SHAs do not certify it.
