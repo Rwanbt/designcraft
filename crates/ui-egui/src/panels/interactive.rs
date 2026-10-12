@@ -826,7 +826,8 @@ mod rendering_regressions {
         for (name, panel, expected_label) in panels {
             let ctx = egui::Context::default();
             crate::theme::install_fonts(&ctx, "en");
-            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(760.0, 720.0))), ..Default::default() };
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(760.0, 720.0))), ..Default::default() };
             let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
             assert!(!frame.shapes.is_empty(), "{name} must display controls or empty-state guidance");
             if let Some(expected) = expected_label {
