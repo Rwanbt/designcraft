@@ -9,9 +9,8 @@ fn cli() -> Command {
 
 #[test]
 fn script_from_stdin_with_references_saves_and_exports() {
-    let dir = std::env::temp_dir().join(format!("dc-cli-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let (doc, png) = (dir.join("a.designcraft"), dir.join("a.png"));
+    let dir = tempfile::tempdir().unwrap();
+    let (doc, png) = (dir.path().join("a.designcraft"), dir.path().join("a.png"));
     let mut child = cli()
         .args(["script", "-", "--save", doc.to_str().unwrap(), "--export", png.to_str().unwrap()])
         .stdin(Stdio::piped())
@@ -32,7 +31,18 @@ fn script_from_stdin_with_references_saves_and_exports() {
     assert_eq!(v["completed"], 2);
     assert_eq!(v["results"][1]["text"], "Hi");
     assert!(doc.exists() && png.exists());
-    let _ = std::fs::remove_dir_all(&dir);
+    let bytes = std::fs::read(&png).unwrap();
+    assert!(bytes.starts_with(b"\\x89PNG\\r\\n\\x1a\\n"), "export is not a PNG");
+    assert!(bytes.len() >= 24, "truncated PNG header");
+    let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    assert!(width > 0 && height > 0, "invalid PNG dimensions");
+
+    // Verify the saved native document can be reopened and produces the same raster.
+    let reopened = dir.path().join("reopened.png");
+    let out = cli().args(["run", "--in", doc.to_str().unwrap(), "--export", reopened.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(bytes == std::fs::read(&reopened).unwrap(), "render changed after save/reopen");
 }
 
 #[test]
@@ -105,9 +115,8 @@ fn closed_stdout_ends_quietly() {
 /// after it was silently ignored.
 #[test]
 fn run_export_options_come_before_their_export() {
-    let dir = std::env::temp_dir().join(format!("dc-cli-order-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let (a, b) = (dir.join("a.png"), dir.join("b.png"));
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.png"), dir.path().join("b.png"));
     let (a, b) = (a.to_str().unwrap(), b.to_str().unwrap());
     for (opt, val) in [("--scale", "0.5"), ("--page", "1"), ("--pdf-options", r#"{"pages":"1"}"#)] {
         let out = cli().args(["run", "--sample", "--export", a, opt, val]).output().unwrap();
@@ -120,5 +129,4 @@ fn run_export_options_come_before_their_export() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
     assert!(err.contains("wrote") && std::path::Path::new(a).exists() && std::path::Path::new(b).exists(), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
 }
