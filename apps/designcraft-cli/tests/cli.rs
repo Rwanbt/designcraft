@@ -38,11 +38,31 @@ fn script_from_stdin_with_references_saves_and_exports() {
     let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
     assert!(width > 0 && height > 0, "invalid PNG dimensions");
 
-    // Verify the saved native document can be reopened and produces the same raster.
+    // PNG compression is not a pixel oracle; compare independently decoded RGBA pixels.
     let reopened = dir.path().join("reopened.png");
     let out = cli().args(["run", "--in", doc.to_str().unwrap(), "--export", reopened.to_str().unwrap()]).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(bytes == std::fs::read(&reopened).unwrap(), "render changed after save/reopen");
+    let after_bytes = std::fs::read(&reopened).unwrap();
+    let before_pixels = image::load_from_memory(&bytes).unwrap().to_rgba8();
+    let after_pixels = image::load_from_memory(&after_bytes).unwrap().to_rgba8();
+    assert_eq!(before_pixels.dimensions(), after_pixels.dimensions(), "document page dimensions changed");
+    if let Some(offset) = before_pixels.as_raw().iter().zip(after_pixels.as_raw()).position(|(a, b)| a != b) {
+        // Synthetic fixtures only. Upload both images to diagnose visual state changes.
+        let artifacts = std::path::Path::new("target/test-artifacts/cli-roundtrip");
+        std::fs::create_dir_all(artifacts).unwrap();
+        std::fs::write(artifacts.join("before.png"), &bytes).unwrap();
+        std::fs::write(artifacts.join("after.png"), &after_bytes).unwrap();
+        std::fs::copy(&doc, artifacts.join("document.designcraft")).unwrap();
+        let (x, y) = (offset / 4 % before_pixels.width() as usize, offset / 4 / before_pixels.width() as usize);
+        panic!(
+            "raster changed after save/reopen at pixel ({x},{y}), channel {}: {} -> {}; PNG bytes {} -> {}",
+            offset % 4,
+            before_pixels.as_raw()[offset],
+            after_pixels.as_raw()[offset],
+            bytes.len(),
+            after_bytes.len()
+        );
+    }
 }
 
 #[test]
