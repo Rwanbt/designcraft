@@ -11,6 +11,7 @@
 //! listed metadata record without a complete primary document. Listing and opening recovery data
 //! therefore treat metadata as optional.
 
+use std::io::Read;
 #[cfg(not(target_arch = "wasm32"))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -181,6 +182,23 @@ fn write_recovery_file(_path: &Path, _bytes: &[u8]) -> Result<()> {
     Err(EngineError::Other("recovery files are unavailable on the web".into()))
 }
 
+/// Recovery metadata contains only a path, title and timestamp. A corrupt or hostile
+/// metadata file must not allocate an unbounded string when listing crash recovery entries.
+const MAX_RECOVERY_METADATA_BYTES: u64 = 256 * 1024;
+
+fn read_recovery_metadata(path: &Path) -> Value {
+    if !regular_recovery_file(path) {
+        return json!({});
+    }
+    let Ok(file) = std::fs::File::open(path) else { return json!({}) };
+    let mut bounded = file.take(MAX_RECOVERY_METADATA_BYTES + 1);
+    let mut bytes = Vec::new();
+    if bounded.read_to_end(&mut bytes).is_err() || bytes.len() as u64 > MAX_RECOVERY_METADATA_BYTES {
+        return json!({});
+    }
+    serde_json::from_slice::<Value>(&bytes).ok().filter(Value::is_object).unwrap_or(json!({}))
+}
+
 /// Recovery entries in `dir`: (uid, metadata).
 pub fn list(dir: &Path) -> Vec<(u64, Value)> {
     let mut out = Vec::new();
@@ -197,12 +215,7 @@ pub fn list(dir: &Path) -> Vec<(u64, Value)> {
         let Some(uid) = p.file_stem().and_then(|s| s.to_str()).and_then(|s| s.parse::<u64>().ok()) else { continue };
         // Metadata is a file on disk: anything but an object (corrupt, hand-edited) counts as none.
         let meta_path = p.with_extension("json");
-        let meta = regular_recovery_file(&meta_path)
-            .then(|| std::fs::read_to_string(&meta_path).ok())
-            .flatten()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .filter(Value::is_object)
-            .unwrap_or(json!({}));
+        let meta = read_recovery_metadata(&meta_path);
         out.push((uid, meta));
     }
     out.sort_by_key(|e| e.0);
@@ -336,6 +349,61 @@ mod tests {
             assert!(doc.path.is_none(), "invalid metadata must not inject a file path");
             assert!(list(&dir).is_empty());
         }
+    }
+
+    #[test]
+    fn command_layer_recovery_roundtrip_preserves_unsaved_edits() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("recovery");
+        let params = json!({"dir": dir.to_string_lossy()});
+        let mut original = dirty_session();
+
+        let result = original.execute("file.recovery.save", &params).unwrap();
+        assert_eq!(result["saved"], 1);
+        let entries = original.execute("file.recovery.list", &params).unwrap();
+        assert_eq!(entries.as_array().unwrap().len(), 1);
+        assert!(entries[0]["uid"].is_u64());
+
+        let mut restored = Session::new();
+        let result = restored.execute("file.recovery.open", &params).unwrap();
+        assert_eq!(result["opened"].as_array().unwrap().len(), 1);
+        assert_eq!(restored.doc().unwrap().doc.spreads[0].items.len(), 1);
+        assert!(restored.doc().unwrap().is_dirty());
+        assert!(original.execute("file.recovery.list", &params).unwrap().as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn repeated_recovery_saves_keep_only_one_complete_pair() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("recovery");
+        let source = dirty_session();
+        assert_eq!(save(&source, &dir).unwrap(), 1);
+        let uid = list(&dir)[0].0;
+        let (doc, meta) = files(&dir, uid);
+        let first = std::fs::read(&doc).unwrap();
+        assert_eq!(save(&source, &dir).unwrap(), 1);
+        assert_eq!(std::fs::read(&doc).unwrap(), first);
+        assert!(meta.exists());
+        assert_eq!(list(&dir).len(), 1);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2, "no leaked temporary files");
+    }
+
+    #[test]
+    fn oversized_recovery_metadata_is_ignored_without_losing_document() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("recovery");
+        assert_eq!(save(&dirty_session(), &dir).unwrap(), 1);
+        let uid = list(&dir)[0].0;
+        let (_, meta) = files(&dir, uid);
+        let oversized = json!({"path": "a".repeat(MAX_RECOVERY_METADATA_BYTES as usize), "title": "untrusted"});
+        let bytes = serde_json::to_vec(&oversized).unwrap();
+        assert!(bytes.len() as u64 > MAX_RECOVERY_METADATA_BYTES);
+        std::fs::write(&meta, bytes).unwrap();
+        assert_eq!(list(&dir)[0].1, json!({}));
+        let mut restored = Session::new();
+        assert_eq!(open(&mut restored, &dir).unwrap().len(), 1);
+        assert!(restored.doc().unwrap().path.is_none());
+        assert!(restored.doc().unwrap().is_dirty());
     }
 
     #[test]
