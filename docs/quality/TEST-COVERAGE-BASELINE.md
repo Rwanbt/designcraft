@@ -46,3 +46,23 @@ To update this baseline: record the run ID, SHA, collected test count and instru
 - [Run 38272759915](https://github.com/Rwanbt/designcraft/actions/runs/38272759915), exact SHA `699e0285`: **67,637 covered / 84,117 instrumented**, **80.41%** over 243 source files.
 - This is the first reproducible workspace-wide line baseline; no policy currently asserts 100% or mixes line, function and branch coverage.
 - The new `.github/workflows/workspace-coverage.yml` preserves LCOV artifacts for 30 days and runs on internal PRs (and by dispatch; weekly only after main integration).
+
+## First package-level LCOV triage (run 38275335782)
+
+Measured on the PR checkout at `2dc6e1c3`; denominator counts instrumented source lines, not functions or branches. The runner reported 67,788 / 84,271 = **80.44%** across 243 files. Grouped from the uploaded raw `summary.json` by source directory:
+
+| Package or application | Lines covered / instrumented | Line coverage | Uncovered lines |
+|---|---:|---:|---:|
+| `apps/designcraft-cli` | 197 / 813 | 24.23% | 616 |
+| `crates/ui-egui` | 12,644 / 20,741 | 60.96% | 8,097 |
+| `crates/tools` | 2,829 / 3,660 | 77.30% | 831 |
+| `crates/render` | 2,001 / 2,411 | 82.99% | 410 |
+| `crates/engine` | 20,577 / 23,471 | 87.67% | 2,894 |
+| `crates/doc` | 5,027 / 5,499 | 91.42% | 472 |
+| `crates/geom` | 1,769 / 1,841 | 96.09% | 72 |
+
+**Large uncovered files:** `ui-egui/src/dialogs.rs` (2,214 lines), `ui-egui/src/panels/properties.rs` (1,093), `ui-egui/src/panels/interactive.rs` (734), `ui-egui/src/panels/swatches.rs` (534), `apps/designcraft-cli/src/perf.rs` (464). These UI hotspots require interaction-specific and real GUI runs, not merely test attribute counts. The perf CLI is a performance diagnostic, not a normal unit-tested command; avoid executing its enormous default fixture just to inflate coverage.
+
+**CI metadata bug fixed in workflow:** for PR events `github.sha` can refer to a synthetic merge commit even when checkout pins `github.event.pull_request.head.sha`. The LCOV report now records actual `git rev-parse HEAD` as `sha` and the workflow-event SHA separately as `workflow_sha`, preventing accidental attribution of measurements to the wrong revision.
+
+Two independently validated PDF/X-4 CLI integration tests from `fix/cli-roundtrip-20261012@3a8e71aa` have been copied into the main draft PR. Their [source run 38275558553](https://github.com/Rwanbt/designcraft/actions/runs/38275558553) passed all **8** CLI tests; revalidation of the combined PR HEAD remains mandatory.

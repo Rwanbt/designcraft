@@ -54,6 +54,8 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import json
+          import subprocess
+          source_sha = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
           lines = Path("coverage/workspace.lcov").read_text().splitlines()
           files = []
           curr = {}
@@ -72,8 +74,8 @@ jobs:
           total = sum(f["lines"] for f in files)
           assert total > 0 and hit <= total
           summary = f"Coverage (line, instrumented Rust workspace): {hit}/{total} = {100*hit/total:.2f}% across {len(files)} files"
-          print(summary)
-          report = {"sha": "${{ github.sha }}", "covered_lines": hit, "instrumented_lines": total, "percent_lines": round(100*hit/total,2), "files": files}
+          print(summary + f" (checkout {source_sha})")
+          report = {"sha": source_sha, "workflow_sha": "${{ github.sha }}", "covered_lines": hit, "instrumented_lines": total, "percent_lines": round(100*hit/total,2), "files": files}
           Path("coverage/summary.json").write_text(json.dumps(report, indent=2)+"\n")
           with open(__import__("os").environ["GITHUB_STEP_SUMMARY"], "a") as f:
               f.write(summary+"\n")
