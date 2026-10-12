@@ -779,15 +779,23 @@ mod rendering_regressions {
             frame.textures_delta.clear();
         }
 
-        // The document-aware interactive editors must also construct a frame without
-        // mutating an untouched document or requiring a real window system.
-        for panel in [tags as Panel, liquid, transitions] {
+        // Tags and Liquid draw user guidance even when there is no canvas page.
+        // Transitions requires a *current* canvas page and deliberately returns early
+        // when none is selected; that state is not a UI rendering failure.
+        for (name, panel) in [("Tags", tags as Panel), ("Liquid", liquid)] {
             let input =
                 egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0))), ..Default::default() };
             let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
-            assert!(!frame.shapes.is_empty(), "document panel rendered no interface");
+            assert!(!frame.shapes.is_empty(), "{name} must show document or empty-state guidance");
             frame.textures_delta.clear();
         }
+        let current_page = crate::canvas::current_page(&app);
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0))), ..Default::default() };
+        let mut frame = ctx.run_ui(input, |ui| transitions(&mut app, ui));
+        if current_page.is_some() {
+            assert!(!frame.shapes.is_empty(), "Transitions must show controls when the canvas has a page");
+        }
+        frame.textures_delta.clear();
         assert!(!app.session.doc().unwrap().is_dirty(), "rendering idle interactive panels must not edit the document");
     }
 
