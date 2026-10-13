@@ -2208,3 +2208,57 @@ mod tests {
         assert_eq!(after, name, "clicking the swatch chip applies it");
     }
 }
+
+#[cfg(test)]
+mod selection_render_tests {
+    use super::*;
+
+    fn labels_from_panel(app: &mut DesignApp) -> Vec<String> {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx, "en");
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 1100.0));
+        let before = app.session.active().map(|doc| doc.doc.clone());
+        let mut frame = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| show(app, ui));
+        let labels: Vec<String> = frame
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        frame.textures_delta.clear();
+        if let Some(before) = before {
+            assert!(std::sync::Arc::ptr_eq(&before, &app.session.doc().unwrap().doc), "rendering the Properties panel must never edit a document");
+        }
+        labels
+    }
+
+    fn contains(labels: &[String], name: &str) {
+        assert!(labels.iter().any(|l| l.contains(name)), "expected {name:?} in Properties panel: {labels:?}");
+    }
+
+    #[test]
+    fn properties_panel_renders_distinct_document_and_selection_contexts_read_only() {
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), Default::default());
+        contains(&labels_from_panel(&mut app), "No document open");
+
+        app.run("file.new", json!({})).unwrap();
+        assert_eq!(selection_title(&app, &super::sel_info(&app)), "No Selection");
+        contains(&labels_from_panel(&mut app), "No Selection");
+
+        let one = app.run("frame.create", json!({"rect": [50, 50, 160, 170], "content": "unassigned"})).unwrap()["id"].as_u64().unwrap();
+        assert_eq!(selection_title(&app, &super::sel_info(&app)), "Rectangle");
+        contains(&labels_from_panel(&mut app), "Rectangle");
+
+        let two = app.run("frame.create", json!({"rect": [230, 50, 340, 170], "content": "unassigned"})).unwrap()["id"].as_u64().unwrap();
+        app.session.active_mut().unwrap().selection =
+            designcraft_doc::Selection::items(vec![designcraft_doc::ItemId(one), designcraft_doc::ItemId(two)]);
+        assert_eq!(selection_title(&app, &super::sel_info(&app)), "Multiple Objects");
+        contains(&labels_from_panel(&mut app), "Multiple Objects");
+
+        app.run("frame.create", json!({"rect": [50, 200, 270, 340], "content": "text", "text": "Hello", "caret": false})).unwrap();
+        assert_eq!(selection_title(&app, &super::sel_info(&app)), "Text Frame");
+        contains(&labels_from_panel(&mut app), "Text Frame");
+    }
+}
