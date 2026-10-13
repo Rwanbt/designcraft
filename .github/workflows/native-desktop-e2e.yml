@@ -1,0 +1,74 @@
+# Real Linux desktop smoke: Xvfb + software GPU + loopback control protocol.
+name: Native desktop control E2E
+on:
+  push:
+    branches: [test/native-desktop-control-e2e-20261013]
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/designcraft/**"
+      - "crates/ui-egui/**"
+      - "tests/native_desktop_smoke.py"
+      - ".github/workflows/native-desktop-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-desktop-e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  DESIGNCRAFT_NO_PREFS: "1"
+  LIBGL_ALWAYS_SOFTWARE: "1"
+  WGPU_BACKEND: "gl"
+
+jobs:
+  desktop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install native UI and headless display dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth pkg-config libasound2-dev libudev-dev libgtk-3-dev \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libgl1-mesa-dev libgl1-mesa-dri libegl1 libfontconfig1-dev
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: native-desktop-e2e
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy -p designcraft --all-targets --locked -- -D warnings
+      - run: cargo build -p designcraft --locked
+      - name: Boot, control, save, render, screenshot and close the native desktop
+        run: |
+          mkdir -p target/test-artifacts/native-desktop
+          xvfb-run -a -s "-screen 0 1440x900x24" ./target/debug/designcraft --control 18679 > target/test-artifacts/native-desktop/app.log 2>&1 &
+          app_pid=$!
+          trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' EXIT
+          python3 tests/native_desktop_smoke.py --port 18679 --out target/test-artifacts/native-desktop
+          for n in {1..30}; do
+            if ! kill -0 "$app_pid" 2>/dev/null; then
+              wait "$app_pid"
+              exit $?
+            fi
+            sleep 1
+          done
+          echo "::error::The desktop ignored app.quit and did not terminate"
+          exit 1
+      - name: Native E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-desktop-e2e
+          path: target/test-artifacts/native-desktop/
+          if-no-files-found: warn
+          retention-days: 14
