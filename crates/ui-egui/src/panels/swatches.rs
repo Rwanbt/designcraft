@@ -573,3 +573,90 @@ pub fn gradient_panel(app: &mut DesignApp, ui: &mut egui::Ui) {
         });
     }
 }
+
+#[cfg(test)]
+mod selected_panel_contracts {
+    use super::*;
+
+    fn selected_frame_app() -> DesignApp {
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({})).unwrap();
+        let result = app.run("frame.create", json!({"rect": [72, 72, 200, 200], "content": "graphic"})).unwrap();
+        let id = result["id"].as_u64().unwrap();
+        assert_eq!(app.session.active().unwrap().selection.items[0].0, id);
+        app
+    }
+
+    fn panel_context() -> egui::Context {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx, "en");
+        ctx
+    }
+
+    #[test]
+    fn selected_color_and_gradient_panels_expose_controls_without_mutating_document() {
+        let mut app = selected_frame_app();
+        app.run("object.fill", json!({"swatch": "[Black]"})).unwrap();
+        let panels: [(&str, fn(&mut DesignApp, &mut egui::Ui)); 3] = [("Swatches", show), ("Color", color_panel), ("Gradient", gradient_panel)];
+        let before = app.session.doc().unwrap().doc.clone();
+        for (name, panel) in panels {
+            let ctx = panel_context();
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(660.0, 740.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
+            let painted = !frame.shapes.is_empty();
+            frame.textures_delta.clear();
+            assert!(painted, "{name} must render controls for a selected graphic frame");
+            assert!(std::sync::Arc::ptr_eq(&before, &app.session.doc().unwrap().doc), "{name} mutated the document without input");
+        }
+
+        app.run("object.gradient", json!({})).unwrap();
+        let before = app.session.doc().unwrap().doc.clone();
+        let ctx = panel_context();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(660.0, 740.0))), ..Default::default() };
+        let mut frame = ctx.run_ui(input, |ui| gradient_panel(&mut app, ui));
+        let labels: Vec<String> = frame
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        frame.textures_delta.clear();
+        assert!(labels.iter().any(|s| s.contains("Reverse")), "gradient controls must offer reversal: {labels:?}");
+        assert!(labels.iter().any(|s| s.contains("Location")), "gradient controls must expose stop location: {labels:?}");
+        assert!(std::sync::Arc::ptr_eq(&before, &app.session.doc().unwrap().doc), "idle gradient panel must be read-only");
+    }
+
+    #[test]
+    fn clicking_named_swatch_updates_selected_frame_fill_via_command_path() {
+        let mut app = selected_frame_app();
+        app.run("object.fill", json!({"swatch": "[Paper]"})).unwrap();
+        let selected = app.session.active().unwrap().selection.items[0];
+        assert_eq!(app.session.doc().unwrap().doc.item(selected).unwrap().fill.swatch, "[Paper]");
+        let ctx = panel_context();
+        let bounds = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(660.0, 740.0));
+        let mut first = ctx.run_ui(egui::RawInput { screen_rect: Some(bounds), time: Some(1.0), ..Default::default() }, |ui| show(&mut app, ui));
+        let black = first.shapes.iter().find_map(|s| match &s.shape {
+            egui::Shape::Text(text) if text.galley.job.text == "[Black]" => Some(text.visual_bounding_rect().center()),
+            _ => None,
+        });
+        first.textures_delta.clear();
+        let pos = black.expect("the default Black swatch is visible and clickable");
+        for (step, pressed) in [true, false].into_iter().enumerate() {
+            let input = egui::RawInput {
+                screen_rect: Some(bounds),
+                time: Some(2.0 + step as f64 * 0.1),
+                events: vec![
+                    egui::Event::PointerMoved(pos),
+                    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE },
+                ],
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| show(&mut app, ui));
+            output.textures_delta.clear();
+        }
+        assert_eq!(app.session.doc().unwrap().doc.item(selected).unwrap().fill.swatch, "[Black]", "click should invoke the object.fill command");
+    }
+}

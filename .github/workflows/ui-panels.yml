@@ -2,11 +2,12 @@
 name: Interactive panel smoke
 on:
   push:
-    branches: [test/ui-interactive-panels-20261012]
+    branches: [test/ui-interactive-panels-20261012, test/swatches-selected-coverage-20261013]
   pull_request:
     branches: [main]
     paths:
       - "crates/ui-egui/src/panels/interactive.rs"
+      - "crates/ui-egui/src/panels/swatches.rs"
       - ".github/workflows/ui-panels.yml"
   workflow_dispatch:
 
