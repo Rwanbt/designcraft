@@ -605,3 +605,57 @@ pub fn bench(args: &[String]) -> Result<(), String> {
     let rows = measure(&doc, runs)?;
     print("", &rows, noisy)
 }
+
+#[cfg(test)]
+mod deterministic_perf_tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_random_generator_and_filler_are_reproducible() {
+        let mut first = Rng(0x5eed);
+        let mut second = Rng(0x5eed);
+        for _ in 0..1024 {
+            let a = first.next();
+            assert!(a.is_finite() && (0.0..1.0).contains(&a));
+            assert_eq!(a, second.next(), "fixed seed must generate the same sequence");
+        }
+        let mut a = Rng(0x5eed);
+        let mut b = Rng(0x5eed);
+        let left = filler(&mut a, 900);
+        let right = filler(&mut b, 900);
+        assert_eq!(left, right);
+        assert!(left.len() >= 900);
+        assert!(left.contains(".\n"), "filler must separate paragraphs");
+        assert!(left.chars().next().unwrap().is_uppercase());
+        assert_eq!(filler(&mut Rng(1), 0), "");
+    }
+
+    #[test]
+    fn procedural_asset_is_a_real_opaque_png_with_known_dimensions() {
+        let png = art_png(3, 2, 0.25);
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
+        let decoded = image::load_from_memory(&png).unwrap().to_rgba8();
+        assert_eq!(decoded.dimensions(), (3, 2));
+        assert!(decoded.pixels().all(|pixel| pixel[3] == 255));
+        assert_eq!(png, art_png(3, 2, 0.25), "same inputs must render identical bytes");
+    }
+
+    #[test]
+    fn tiny_synthetic_document_is_consistent_and_roundtrips() {
+        let spec = Spec { pages: 1, frames_per_page: 2, frames_per_story: 1, chars: 80, images: 1, assets: 1 };
+        let doc = synthetic(&spec).unwrap();
+        assert_eq!(doc.page_count(), 1);
+        assert_eq!(doc.assets.len(), 1);
+        assert_eq!(doc.stories.len(), 2);
+        assert!(doc.stories.values().map(|story| story.text.len()).sum::<usize>() >= spec.chars);
+        assert_eq!(doc.spreads.iter().map(|spread| spread.items.len()).sum::<usize>(), 4);
+        doc.check().unwrap();
+
+        let serialized = designcraft_format::save(&doc).unwrap();
+        let restored = designcraft_format::load(&serialized).unwrap();
+        assert_eq!(restored.page_count(), 1);
+        assert_eq!(restored.assets.len(), 1);
+        assert_eq!(restored.stories.len(), 2);
+        assert_eq!(restored.spreads.iter().map(|spread| spread.items.len()).sum::<usize>(), 4);
+    }
+}

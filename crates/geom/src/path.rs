@@ -419,6 +419,34 @@ mod tests {
     }
 
     #[test]
+    fn malformed_anchor_coordinates_fail_without_silent_defaults() {
+        for json in [r#"{"p":[]}"#, r#"{"p":[1]}"#, r#"{"p":{"x":1}}"#, r#"{"p":{"y":2}}"#, r#"{"p":{"x":"bad","y":2}}"#] {
+            assert!(serde_json::from_str::<Anchor>(json).is_err(), "{json}");
+        }
+        let future = r#"{"p":{"x":1,"y":2,"future":true}}"#;
+        let parsed: Anchor = serde_json::from_str(future).unwrap();
+        assert_eq!(parsed, Anchor::corner(Point::new(1.0, 2.0)));
+    }
+
+    #[test]
+    fn anchor_handles_translate_reverse_and_retract() {
+        let mut anchor = Anchor::smooth(Point::new(3.0, 4.0), Point::new(5.0, 4.0));
+        assert!(anchor.has_in() && anchor.has_out());
+        assert_eq!(anchor.h_in, Point::new(1.0, 4.0));
+        assert_eq!(anchor.reversed().h_in, anchor.h_out);
+        assert_eq!(anchor.reversed().h_out, anchor.h_in);
+        anchor.translate(kurbo::Vec2::new(7.0, -2.0));
+        assert_eq!(anchor.p, Point::new(10.0, 2.0));
+        assert_eq!(anchor.h_in, Point::new(8.0, 2.0));
+        assert_eq!(anchor.h_out, Point::new(12.0, 2.0));
+        anchor.retract();
+        assert_eq!(anchor.kind, AnchorKind::Corner);
+        assert!(!anchor.has_in() && !anchor.has_out());
+        assert_eq!(anchor.h_in, anchor.p);
+        assert_eq!(anchor.h_out, anchor.p);
+    }
+
+    #[test]
     fn anchors_serialize_compactly_and_read_v1_maps() {
         let corner = Anchor::corner(Point::new(1.0, 2.0));
         assert_eq!(serde_json::to_string(&corner).unwrap(), r#"{"p":[1.0,2.0]}"#);

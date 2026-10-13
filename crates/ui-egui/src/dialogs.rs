@@ -3810,6 +3810,52 @@ mod tests {
     }
 
     #[test]
+    fn dialog_presets_respect_explicit_values_and_roundtrip_units() {
+        let new_doc = Dialog::new("newDocument", json!({"pages": 9, "width": "30p0", "custom": {"enabled": true}}));
+        assert_eq!(new_doc.fields["pages"], 9, "explicit page count must win over the preset");
+        assert_eq!(new_doc.fields["width"], "30p0");
+        assert_eq!(new_doc.fields["height"], "66p0", "missing fields receive preset defaults");
+        assert_eq!(new_doc.fields["custom"]["enabled"], true, "unknown extension fields survive");
+        let pdf = Dialog::new("pdfExport", json!({"standard": "x4", "tagged": false, "marksCrop": true}));
+        assert_eq!(pdf.fields["standard"], "x4");
+        assert_eq!(pdf.fields["tagged"], false);
+        assert_eq!(pdf.fields["marksCrop"], true);
+        assert_eq!(pdf.fields["preset"], "Desktop Printing");
+        assert_eq!(pdf.fields["marksWeight"], "0.25");
+        let frame = Dialog::new("frameSize", json!({"width": 72.0, "height": 36.0, "anchor": 1}));
+        assert!(frame.fields["width"].is_string());
+        assert!(frame.fields["height"].is_string());
+        assert_eq!(frame.m("width"), Some(72.0));
+        assert_eq!(frame.m("height"), Some(36.0));
+        assert_eq!(frame.fields["anchor"], 1);
+        assert_eq!(Dialog::new("unrecognized-extension", json!(42)).fields.len(), 0);
+    }
+
+    #[test]
+    fn footnote_rule_flattening_and_special_character_tokens_are_stable() {
+        let d = Dialog::new(
+            "footnoteOptions",
+            json!({
+                "rule": {"weight": 2, "offset": "1p0"},
+                "separator": "\t\u{2003}\u{2002}",
+                "tab": "custom",
+                "extension": 1
+            }),
+        );
+        assert!(d.fields.get("rule").is_none(), "nested rule is flattened for editable fields");
+        assert_eq!(d.fields["rule.weight"], 2);
+        assert_eq!(d.fields["rule.offset"], "1p0");
+        assert_eq!(d.fields["separator"], "^t^m^>");
+        assert_eq!(d.fields["tab"], "custom", "user tab setting must survive");
+        assert_eq!(d.fields["extension"], 1);
+        let empty = Dialog::new("footnoteOptions", json!({}));
+        assert_eq!(empty.fields["separator"], "");
+        assert_eq!(empty.fields["tab"], "numbering");
+        assert_eq!(Dialog::new("paragraphStyleOptions", json!({})).fields["section"], "general");
+        assert_eq!(Dialog::new("characterStyleOptions", json!({"section": "advanced"})).fields["section"], "advanced");
+    }
+
+    #[test]
     fn dialog_title_and_actions_fit_scaled_viewports() {
         for language in ["en", "ar"] {
             for size in [egui::vec2(1178.0, 814.0), egui::vec2(589.0, 407.0), egui::vec2(392.0, 271.0), egui::vec2(450.0, 280.0)] {

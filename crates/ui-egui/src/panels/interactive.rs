@@ -13,7 +13,7 @@ fn dest_text(d: &Value) -> String {
         return format!("mailto:{e}");
     }
     if let Some(p) = d.get("page").and_then(Value::as_u64) {
-        return format!("Page {}", p + 1);
+        return format!("Page {}", p.saturating_add(1));
     }
     d.to_string()
 }
@@ -732,4 +732,145 @@ pub fn track_changes(app: &mut DesignApp, ui: &mut egui::Ui) {
             let _ = app.run("changes.rejectAll", json!({}));
         }
     });
+}
+
+#[cfg(test)]
+mod rendering_regressions {
+    use super::*;
+
+    #[test]
+    fn hyperlink_destination_labels_prioritize_supported_fields_and_bound_page_index() {
+        assert_eq!(dest_text(&json!({"url": "https://example.org", "email": "ignored@example.org", "page": 2})), "https://example.org");
+        assert_eq!(dest_text(&json!({"email": "hi@example.org", "page": 2})), "mailto:hi@example.org");
+        assert_eq!(dest_text(&json!({"page": 0})), "Page 1");
+        assert_eq!(dest_text(&json!({"page": 13})), "Page 14");
+        assert_eq!(dest_text(&json!({"page": u64::MAX})), format!("Page {}", u64::MAX));
+        assert_eq!(dest_text(&json!({"url": 5})), r#"{"url":5}"#);
+    }
+
+    #[test]
+    fn interactive_panels_show_empty_document_guidance_and_controls() {
+        let mut session = designcraft_engine::Session::new();
+        session.execute("file.new", &json!({})).unwrap();
+        let mut app = DesignApp::new(session, Default::default());
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx, "en");
+
+        type Panel = fn(&mut DesignApp, &mut egui::Ui);
+        let panels: [(&str, Panel, &str); 4] = [
+            ("Object States", states, "Select two or more objects"),
+            ("Buttons", buttons, "Select an object"),
+            ("Media", media, "Select a placed video"),
+            ("Track Changes", track_changes, "No changes"),
+        ];
+        for (name, panel, expected_label) in panels {
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 720.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
+            let messages: Vec<&str> = frame
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert!(messages.iter().any(|text| text.contains(expected_label)), "{name} missing expected empty-state guidance: {messages:?}");
+            frame.textures_delta.clear();
+        }
+
+        // Tags and Liquid draw user guidance even when there is no canvas page.
+        // Transitions requires a *current* canvas page and deliberately returns early
+        // when none is selected; that state is not a UI rendering failure.
+        for (name, panel) in [("Tags", tags as Panel), ("Liquid", liquid)] {
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
+            assert!(!frame.shapes.is_empty(), "{name} must show document or empty-state guidance");
+            frame.textures_delta.clear();
+        }
+        // Initialize the same viewport state as the real canvas before testing the
+        // page transition controls; merely creating a document does not create a view.
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 720.0));
+        app.canvas_rect = Some(rect);
+        app.view_mut().unwrap();
+        crate::canvas::fit(&mut app, rect, "page");
+        assert_eq!(crate::canvas::current_page(&app), Some(0), "test fixture must resolve page one");
+        let input = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+        let mut frame = ctx.run_ui(input, |ui| transitions(&mut app, ui));
+        assert!(!frame.shapes.is_empty(), "Transitions must show controls with a current page");
+        frame.textures_delta.clear();
+        assert!(!app.session.doc().unwrap().is_dirty(), "rendering idle interactive panels must not edit the document");
+    }
+
+    #[test]
+    fn auxiliary_panels_render_without_selection_or_unexpected_document_edits() {
+        let mut session = designcraft_engine::Session::new();
+        session.execute("file.new", &json!({})).unwrap();
+        let mut app = DesignApp::new(session, Default::default());
+        type Panel = fn(&mut DesignApp, &mut egui::Ui);
+        let panels: [(&str, Panel, Option<&str>); 12] = [
+            ("Object Library", super::super::library::show, Some("No library open")),
+            ("Book", super::super::library::book, Some("No book open")),
+            ("Scripts", super::super::library::scripts, Some("Number the pages")),
+            ("Data Merge", super::super::datamerge::show, Some("No data source")),
+            ("Paragraph Styles", super::super::styles::paragraph, None),
+            ("Character Styles", super::super::styles::character, None),
+            ("Swatches", super::super::swatches::show, None),
+            ("Color", super::super::swatches::color_panel, Some("Select an object")),
+            ("Gradient", super::super::swatches::gradient_panel, Some("Select an object")),
+            ("Table", super::super::table::show, Some("insertion point")),
+            ("Properties", super::super::properties::show, None),
+            ("Glyphs", super::super::glyphs::show, None),
+        ];
+        for (name, panel, expected_label) in panels {
+            let ctx = egui::Context::default();
+            crate::theme::install_fonts(&ctx, "en");
+            let input =
+                egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(760.0, 720.0))), ..Default::default() };
+            let mut frame = ctx.run_ui(input, |ui| panel(&mut app, ui));
+            let has_shapes = !frame.shapes.is_empty();
+            let labels: Vec<String> = frame
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect();
+            // Headless egui requires texture updates to be consumed even when an
+            // assertion fails; otherwise the destructor panics a second time.
+            frame.textures_delta.clear();
+            assert!(has_shapes, "{name} must display controls or empty-state guidance");
+            if let Some(expected) = expected_label {
+                assert!(labels.iter().any(|s| s.contains(expected)), "{name} did not show expected {expected:?}: {labels:?}");
+            }
+            assert!(!app.session.doc().unwrap().is_dirty(), "{name} modified the document while idle");
+        }
+    }
+
+    #[test]
+    fn empty_interactive_panels_render_without_document_or_panicking() {
+        let ctx = egui::Context::default();
+        crate::theme::install_fonts(&ctx, "en");
+        let mut app = DesignApp::new(designcraft_engine::Session::new(), Default::default());
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(640.0, 720.0))), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| {
+            hyperlinks(&mut app, ui);
+            bookmarks(&mut app, ui);
+            articles(&mut app, ui);
+            transitions(&mut app, ui); // No active page is a legitimate UI state.
+        });
+        let labels: Vec<&str> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(text) => Some(text.galley.job.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(labels.iter().any(|s| s.contains("No bookmarks")), "empty bookmarks panel must explain its state: {labels:?}");
+        assert!(labels.iter().any(|s| s.contains("No hyperlinks")), "empty hyperlink panel must explain its state: {labels:?}");
+        output.textures_delta.clear();
+    }
 }

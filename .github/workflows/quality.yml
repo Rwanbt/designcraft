@@ -1,0 +1,109 @@
+# Fork-local quality gates. Do not target or modify storytold/designcraft.
+name: Quality and deterministic tests
+
+on:
+  push:
+    branches:
+      - "test/**"
+      - "fix/**"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  geometry:
+    name: Geometry regression (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest, macos-15]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: clippy, rustfmt, llvm-tools-preview
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: quality-geometry-${{ matrix.os }}
+      - name: Format (workspace)
+        run: cargo fmt --all -- --check
+      - name: Clippy (geometry)
+        run: cargo clippy -p designcraft-geom --all-targets --locked -- -D warnings
+      - name: Geometry regression tests
+        run: cargo test -p designcraft-geom --locked
+      - name: Install pinned coverage tool
+        if: runner.os == 'Linux'
+        run: cargo install cargo-llvm-cov --version 0.6.24 --locked
+      - name: Instrument geometry coverage
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p coverage
+          cargo llvm-cov -p designcraft-geom --locked --lcov --output-path coverage/geom.lcov
+          awk -F: '/^LF:/{lf+=$2} /^LH:/{lh+=$2} END{if(lf==0)exit 1; printf "Geometry lines: %d/%d (%.2f%%)\\n", lh, lf, 100*lh/lf}' coverage/geom.lcov | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Archive instrumented geometry coverage
+        if: runner.os == 'Linux' && always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: geometry-lcov
+          path: coverage/geom.lcov
+          if-no-files-found: warn
+          retention-days: 30
+
+  workspace-linux:
+    name: Rust workspace tests (Linux)
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install native UI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libasound2-dev libudev-dev libgtk-3-dev libxkbcommon-dev \
+            libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev \
+            libgl1-mesa-dev libfontconfig1-dev
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: quality-workspace-linux
+      - name: Locked workspace tests
+        run: cargo test --workspace --locked
+      - name: Locked workspace clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Architecture layering
+        run: cargo xtask layers
+      - name: Asset attribution
+        run: cargo xtask assets
+
+  wasm-geometry:
+    name: Geometry WASM compilation
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: quality-wasm-geometry
+      - run: cargo check -p designcraft-geom --target wasm32-unknown-unknown --locked

@@ -23,3 +23,7 @@ designcraft-format = { workspace = true }
 designcraft-pdf = { workspace = true }
 designcraft-mcp = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true }
+tempfile = { workspace = true }

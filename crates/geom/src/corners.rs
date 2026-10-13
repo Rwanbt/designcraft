@@ -159,6 +159,24 @@ mod tests {
     use kurbo::{Rect, Shape};
 
     #[test]
+    fn corner_labels_and_zero_size_are_stable() {
+        let expected = ["None", "Fancy", "Bevel", "Inset", "Inverse Rounded", "Rounded"];
+        for (shape, label) in CornerShape::ALL.into_iter().zip(expected) {
+            assert_eq!(shape.label(), label);
+            assert!(CornerOptions::uniform(shape, 0.0).is_none());
+        }
+        assert!(CornerOptions::uniform(CornerShape::Rounded, -1.0).is_none());
+        assert!(!CornerOptions::uniform(CornerShape::Rounded, 5.0).is_none());
+    }
+
+    #[test]
+    fn open_polylines_do_not_acquire_live_corners() {
+        let path = PathData::single(SubPath::polyline(&[Point::new(0.0, 0.0), Point::new(10.0, 0.0), Point::new(10.0, 10.0)], false));
+        let result = apply(&path, &CornerOptions::uniform(CornerShape::Rounded, 4.0));
+        assert_eq!(result.elements(), path.to_bezpath().elements());
+    }
+
+    #[test]
     fn none_is_identity() {
         let r = rectangle(Rect::new(0.0, 0.0, 100.0, 50.0));
         assert_eq!(apply(&r, &CornerOptions::default()).bounding_box(), Rect::new(0.0, 0.0, 100.0, 50.0));

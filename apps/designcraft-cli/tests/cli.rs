@@ -9,9 +9,8 @@ fn cli() -> Command {
 
 #[test]
 fn script_from_stdin_with_references_saves_and_exports() {
-    let dir = std::env::temp_dir().join(format!("dc-cli-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let (doc, png) = (dir.join("a.designcraft"), dir.join("a.png"));
+    let dir = tempfile::tempdir().unwrap();
+    let (doc, png) = (dir.path().join("a.designcraft"), dir.path().join("a.png"));
     let mut child = cli()
         .args(["script", "-", "--save", doc.to_str().unwrap(), "--export", png.to_str().unwrap()])
         .stdin(Stdio::piped())
@@ -32,7 +31,40 @@ fn script_from_stdin_with_references_saves_and_exports() {
     assert_eq!(v["completed"], 2);
     assert_eq!(v["results"][1]["text"], "Hi");
     assert!(doc.exists() && png.exists());
-    let _ = std::fs::remove_dir_all(&dir);
+    let bytes = std::fs::read(&png).unwrap();
+    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "export is not a PNG");
+    assert!(bytes.len() >= 24, "truncated PNG header");
+    let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    assert!(width > 0 && height > 0, "invalid PNG dimensions");
+
+    // PNG compression is not a pixel oracle; compare independently decoded RGBA pixels.
+    let reopened = dir.path().join("reopened.png");
+    // The script backend's app.export defaults to 2 px/pt, whereas CLI run defaults to 1.
+    // Request the same raster scale explicitly; do not conflate output settings with persistence.
+    let out = cli().args(["run", "--in", doc.to_str().unwrap(), "--scale", "2", "--export", reopened.to_str().unwrap()]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let after_bytes = std::fs::read(&reopened).unwrap();
+    let before_pixels = image::load_from_memory(&bytes).unwrap().to_rgba8();
+    let after_pixels = image::load_from_memory(&after_bytes).unwrap().to_rgba8();
+    assert_eq!(before_pixels.dimensions(), after_pixels.dimensions(), "document page dimensions changed");
+    if let Some(offset) = before_pixels.as_raw().iter().zip(after_pixels.as_raw()).position(|(a, b)| a != b) {
+        // Synthetic fixtures only. Upload both images to diagnose visual state changes.
+        let artifacts = std::path::Path::new("target/test-artifacts/cli-roundtrip");
+        std::fs::create_dir_all(artifacts).unwrap();
+        std::fs::write(artifacts.join("before.png"), &bytes).unwrap();
+        std::fs::write(artifacts.join("after.png"), &after_bytes).unwrap();
+        std::fs::copy(&doc, artifacts.join("document.designcraft")).unwrap();
+        let (x, y) = (offset / 4 % before_pixels.width() as usize, offset / 4 / before_pixels.width() as usize);
+        panic!(
+            "raster changed after save/reopen at pixel ({x},{y}), channel {}: {} -> {}; PNG bytes {} -> {}",
+            offset % 4,
+            before_pixels.as_raw()[offset],
+            after_pixels.as_raw()[offset],
+            bytes.len(),
+            after_bytes.len()
+        );
+    }
 }
 
 #[test]
@@ -105,9 +137,8 @@ fn closed_stdout_ends_quietly() {
 /// after it was silently ignored.
 #[test]
 fn run_export_options_come_before_their_export() {
-    let dir = std::env::temp_dir().join(format!("dc-cli-order-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let (a, b) = (dir.join("a.png"), dir.join("b.png"));
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b) = (dir.path().join("a.png"), dir.path().join("b.png"));
     let (a, b) = (a.to_str().unwrap(), b.to_str().unwrap());
     for (opt, val) in [("--scale", "0.5"), ("--page", "1"), ("--pdf-options", r#"{"pages":"1"}"#)] {
         let out = cli().args(["run", "--sample", "--export", a, opt, val]).output().unwrap();
@@ -120,5 +151,55 @@ fn run_export_options_come_before_their_export() {
     let err = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "{err}");
     assert!(err.contains("wrote") && std::path::Path::new(a).exists() && std::path::Path::new(b).exists(), "{err}");
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn sample_pdfx4_export_passes_independent_cli_validation() {
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = dir.path().join("sample.pdf");
+    let path = pdf.to_str().unwrap();
+    let exported = cli().args(["run", "--sample", "--pdf-options", r#"{"standard":"x4"}"#, "--export", path]).output().unwrap();
+    assert!(exported.status.success(), "{}", String::from_utf8_lossy(&exported.stderr));
+
+    let bytes = std::fs::read(&pdf).unwrap();
+    assert!(bytes.starts_with(b"%PDF-"), "missing PDF header");
+    assert!(bytes.windows(5).any(|part| part == b"%%EOF"), "missing PDF trailer");
+    assert!(bytes.len() > 1024, "suspiciously short multi-page PDF");
+
+    let validation = cli().args(["validate-pdf", path]).output().unwrap();
+    assert!(validation.status.success(), "{}", String::from_utf8_lossy(&validation.stderr));
+    let report: serde_json::Value = serde_json::from_slice(&validation.stdout).unwrap();
+    assert_eq!(report["standard"], "PDF/X-4");
+    assert_eq!(report["valid"], true);
+    assert!(report["issues"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn malformed_pdf_is_rejected_without_success_exit_status() {
+    let dir = tempfile::tempdir().unwrap();
+    let pdf = dir.path().join("truncated.pdf");
+    std::fs::write(&pdf, b"%PDF-1.6\nmissing all content and xref").unwrap();
+
+    let output = cli().args(["validate-pdf", pdf.to_str().unwrap()]).output().unwrap();
+    assert!(!output.status.success(), "invalid PDF must not pass validation");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["valid"], false);
+    assert!(!report["issues"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn perf_and_bench_reject_invalid_arguments_without_starting_a_heavy_benchmark() {
+    for args in [
+        vec!["perf", "--pages", "invalid"],
+        vec!["perf", "--frames", "not-an-integer"],
+        vec!["perf", "--runs"],
+        vec!["perf", "--unknown"],
+        vec!["bench"],
+        vec!["bench", "--runs", "bad"],
+    ] {
+        let result = cli().args(&args).output().unwrap();
+        assert!(!result.status.success(), "{args:?} must fail");
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(!stderr.trim().is_empty(), "{args:?} must explain the failure");
+    }
 }
